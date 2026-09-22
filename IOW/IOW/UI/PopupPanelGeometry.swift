@@ -77,9 +77,16 @@ enum PopupPanelGeometry {
     /// 「本文欄の高さ」はテキスト高さに `bodyContentInset` の上下分を足した値である
     /// （レイアウト側の制約と同じ内訳。`bodyContentInset` のコメント参照）。
     ///
-    /// - Parameter text: 表示するプレーンテキスト。
-    /// - Returns: 高さは `maxPanelHeight` でクランプする（超過分はスクロールで見る）。
-    static func measurePanelSize(for text: String) -> NSSize {
+    /// - Parameters:
+    ///   - text: 表示するプレーンテキスト。
+    ///   - heightLimit: パネル高さの上限。超過分はスクロールで見る。既定は
+    ///     `maxPanelHeight` だが、`preferredHeightLimit` が求めた空きスペース側の
+    ///     上限を渡すことで、全文をスクロールなしで読めるよう伸ばせる。
+    /// - Returns: パネルサイズ。
+    static func measurePanelSize(
+        for text: String,
+        heightLimit: CGFloat = maxPanelHeight
+    ) -> NSSize {
         let textWidth = maxPanelWidth - contentPadding * 2
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
@@ -90,7 +97,8 @@ enum PopupPanelGeometry {
             attributes: attributes
         )
         let textHeight = ceil(bounding.height)
-        let maxBodyHeight = maxPanelHeight - contentPadding * 2 - bottomBarHeight
+        let chromeHeight = contentPadding * 2 + bottomBarHeight
+        let maxBodyHeight = max(0, heightLimit - chromeHeight)
         // 内側余白（`bodyContentInset`）分を足さないと、1 行でも高さが足りず
         // 文字の下半分がクリップされる。
         let neededBodyHeight = textHeight + bodyContentInset.height * 2
@@ -99,11 +107,57 @@ enum PopupPanelGeometry {
             maxBodyHeight
         )
         let width = min(maxPanelWidth, max(minPanelWidth, ceil(bounding.width) + contentPadding * 2))
-        let height = contentPadding + fieldHeight + contentPadding + bottomBarHeight
-        return NSSize(width: width, height: min(height, maxPanelHeight))
+        let height = chromeHeight + fieldHeight
+        return NSSize(width: width, height: height)
     }
 
     // MARK: - 配置計算
+
+    /// パネル高さの上限を、配置予定側の空きスペースから決める。
+    ///
+    /// 全文がスクロールなしで読めることを最優先する。ポップアップは既定でカーソルの
+    /// 右下に、上端をカーソルから `cursorOffset` だけ下へ離して置かれる
+    /// （`preferredOrigin` の反転規則と同条件）。
+    ///
+    /// 1. 下側（カーソル下〜可視領域下端）に全文が収まる → その全文分の高さ。
+    /// 2. 下側に収まらず上側（反転配置）なら全文が収まる → その高さ（あちらは
+    ///    `preferredOrigin` が反転する）。
+    /// 3. どちらにも収まらない → 空きの多い側まで伸ばし、差分はスクロールで読む。
+    ///
+    /// 可視領域が得られない環境（テスト・起動直後）では従来どおり `maxPanelHeight`
+    /// を返し、ドラッグ移動済みパネルの既定にもなる。
+    ///
+    /// - Parameters:
+    ///   - text: 表示するプレーンテキスト。
+    ///   - mouseLocation: パネル配置の基準になるマウス位置。
+    ///   - visibleFrame: マウス位置を含むスクリーンの可視領域。
+    /// - Returns: `measurePanelSize(for:heightLimit:)` へ渡す高さ上限。
+    static func preferredHeightLimit(
+        for text: String,
+        mouseLocation: NSPoint,
+        visibleFrame: NSRect
+    ) -> CGFloat {
+        let insetFrame = visibleFrame.insetBy(dx: screenMargin, dy: screenMargin)
+        guard insetFrame.width > 0, insetFrame.height > 0 else {
+            return maxPanelHeight
+        }
+        // 全文を入れたときの高さ（上限クランプなし）。これを基準に配置側を選ぶ。
+        let neededHeight = measurePanelSize(for: text, heightLimit: .greatestFiniteMagnitude).height
+        // 下配置の空き。上端はカーソル - cursorOffset。
+        let belowAvailable = mouseLocation.y - cursorOffset - insetFrame.minY
+        // 上配置（反転）の空き。下端はカーソル + cursorOffset。
+        let aboveAvailable = insetFrame.maxY - (mouseLocation.y + cursorOffset)
+
+        if neededHeight <= belowAvailable {
+            return neededHeight
+        }
+        if neededHeight <= aboveAvailable {
+            return neededHeight
+        }
+        // どちらにも収まらない時のみ、空きの多い側まで伸ばして差分をスクロールさせる。
+        // 極端に狭い環境でも最低限の本文（`bodyMinHeight` の 2 行分）は確保する。
+        return max(belowAvailable, aboveAvailable, bodyMinHeight * 2)
+    }
 
     /// カーソル付近に置きつつ、可視領域内に収まる原点を計算する。
     ///

@@ -118,8 +118,12 @@ final class SelectionTextPopupPanelController: NSObject {
                 for try await delta in stream {
                     guard !Task.isCancelled else { return }
                     translated += delta
+                    // delta ごとに本文を反映してパネルを伸ばす。返信が届くたびに
+                    // 全文が読める幅まで成長し、空きスペースで止まったぶんはスクロール。
+                    self.updateStreamingProgress(text: translated)
                 }
                 guard !Task.isCancelled else { return }
+                // 空のストリーム（翻訳結果なし）でも表示を安定させるための最終更新。
                 self.update(text: translated)
             } catch {
                 guard !Task.isCancelled else { return }
@@ -149,8 +153,11 @@ final class SelectionTextPopupPanelController: NSObject {
                 for try await delta in stream {
                     guard !Task.isCancelled else { return }
                     simplified += delta
+                    // delta ごとに本文を反映してパネルを伸ばす（翻訳と同じ挙動）。
+                    self.updateStreamingProgress(text: simplified)
                 }
                 guard !Task.isCancelled else { return }
+                // 空のストリーム（結果なし）でも表示を安定させるための最終更新。
                 self.update(text: simplified)
             } catch {
                 guard !Task.isCancelled else { return }
@@ -167,6 +174,18 @@ final class SelectionTextPopupPanelController: NSObject {
         translatedText = text
         bodyTextView?.string = text
         updateActionButtonsEnabled()
+        resizePanel()
+    }
+
+    /// ストリーミング途中の本文を反映し、パネルを本文量に合わせて伸ばす。
+    ///
+    /// `update(text:)` と違って `isTranslating` を解除しない。返信が届くたびに
+    /// パネルが成長し、画面の空きスペースを超えるぶんはスクロールになる。
+    private func updateStreamingProgress(text: String) {
+        guard panel != nil else { return }
+        stopTranslatingAnimation()
+        translatedText = text
+        bodyTextView?.string = text
         resizePanel()
     }
 
@@ -214,9 +233,9 @@ final class SelectionTextPopupPanelController: NSObject {
     /// 本文と下部バーを持つパネルを表示する。
     private func presentPanel(contextText: String) {
         let mouseLocation = anchorMouseLocation ?? NSEvent.mouseLocation
-        let panelSize = PopupPanelGeometry.measurePanelSize(for: contextText)
         let screen = PopupPanelGeometry.screen(containing: mouseLocation) ?? NSScreen.main
         let visibleFrame = screen?.visibleFrame ?? .zero
+        let panelSize = measurePanelSize(for: contextText, visibleFrame: visibleFrame, mouseLocation: mouseLocation)
         let origin = PopupPanelGeometry.preferredOrigin(
             mouseLocation: mouseLocation,
             panelSize: panelSize,
@@ -233,16 +252,20 @@ final class SelectionTextPopupPanelController: NSObject {
         panel = newPanel
         newPanel.orderFrontRegardless()
         installClickMonitors(for: newPanel)
+        newPanel.contentView?.layoutSubtreeIfNeeded()
+        updateScrollerVisibility()
         updateActionButtonsEnabled()
     }
 
     /// 本文の量に合わせてパネルサイズを更新する。
     private func resizePanel() {
         guard let panel else { return }
-        let panelSize = PopupPanelGeometry.measurePanelSize(for: displayedContextText)
         let mouseLocation = anchorMouseLocation ?? panel.frame.origin
         let screen = PopupPanelGeometry.screen(containing: mouseLocation) ?? NSScreen.main
         let visibleFrame = screen?.visibleFrame ?? .zero
+        let panelSize = hasBeenMovedByUser
+            ? PopupPanelGeometry.measurePanelSize(for: displayedContextText)
+            : measurePanelSize(for: displayedContextText, visibleFrame: visibleFrame, mouseLocation: mouseLocation)
         let origin = hasBeenMovedByUser
             ? panel.frame.origin
             : PopupPanelGeometry.preferredOrigin(
@@ -253,6 +276,44 @@ final class SelectionTextPopupPanelController: NSObject {
         panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
         panel.contentView?.setFrameSize(panelSize)
         panel.contentView?.layoutSubtreeIfNeeded()
+        updateScrollerVisibility()
+    }
+
+    /// 本文が本文欄の高さを超える時だけ、縦スクロールバーを表示する。
+    ///
+    /// `resizePanel` の直後（本文とパネルサイズの反映後）に呼ぶ。本文の実高さは
+    /// Layout Manager の `usedRect` から同期で得るため、frame がまだ本文の
+    /// レイアウト前の古い高さのまま、というズレを踏まない。
+    private func updateScrollerVisibility() {
+        guard let bodyTextView,
+              let scrollView = bodyTextView.enclosingScrollView,
+              let textContainer = bodyTextView.textContainer,
+              let layoutManager = bodyTextView.layoutManager else { return }
+        layoutManager.ensureLayout(for: textContainer)
+        let contentHeight = layoutManager.usedRect(for: textContainer).height
+        let visibleHeight = scrollView.contentView.bounds.height
+        // 1pt 弱の丸め誤差で「ちょうど収まる」時までスクローラを出さない。
+        scrollView.hasVerticalScroller = contentHeight > visibleHeight + 1
+    }
+
+    /// 配置予定側の空きスペースを上限に、全文が収まるようパネルサイズを測る。
+    ///
+    /// 画面の空きに余裕があるのに固定上限で打ち切ってスクロールさせる代わりに、
+    /// `PopupPanelGeometry.preferredHeightLimit` が求めた上限まで伸ばす。画面から
+    /// はみ出す時のみ差分がスクロールになる（ジオメトリ側の責務）。
+    private func measurePanelSize(
+        for text: String,
+        visibleFrame: NSRect,
+        mouseLocation: NSPoint
+    ) -> NSSize {
+        PopupPanelGeometry.measurePanelSize(
+            for: text,
+            heightLimit: PopupPanelGeometry.preferredHeightLimit(
+                for: text,
+                mouseLocation: mouseLocation,
+                visibleFrame: visibleFrame
+            )
+        )
     }
 
     /// UI に表示中の本文。
@@ -415,7 +476,9 @@ final class SelectionTextPopupPanelController: NSObject {
         identifier: NSUserInterfaceItemIdentifier
     ) -> NSScrollView {
         let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
+        // スクロールが必要になった時だけスクローラを出す（`resizePanel` が切替える）。
+        // 常時出しておくと、本文が収まる時も余白にスクロールバーが残る。
+        scrollView.hasVerticalScroller = false
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
