@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  ここに書くのは、ビルド設定（INFOPLIST_KEY_*）では表せない項目だけである。
+	  GENERATE_INFOPLIST_FILE は有効のままで、生成された内容とこのファイルが併合される。
+	  スカラー値の設定はビルド設定側にあるので、二重に書かないこと。
+
+	  App Transport Security の例外は置かない。Gemini API は HTTPS の公開ホスト名で、
+	  ATS の適用対象はこの形で満たされる。
+
+	  いまこの条件に当てはまる項目は無い。
+	-->
+</dict>
+</plist>

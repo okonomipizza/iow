@@ -1,0 +1,63 @@
+// アプリのビルド構成をまとめる唯一の設定ファイル。
+//
+// 配布はしないため、bundle id・表示名は 1 つに固定してある。
+// Xcode の Debug / Release という構成は従来どおり残っているが、両方とも
+// このファイルを参照するだけで、中身は同じになる。
+//
+// 構成ごとの値を検証する仕組みは無い。ここを変えるときは自分で
+// `xcodebuild -showBuildSettings` を見て確認すること。
+
+// アプリ本体の識別子。
+//
+// **この値が分離の起点である。** Keychain の service も TCC の許可もこの値から
+// 導かれる。変更すると保存済み API キーと権限許可が一致しなくなり、ユーザーは
+// 入れ直し・許可し直しになるため、変えないこと。
+PRODUCT_BUNDLE_IDENTIFIER = com.okonomipizza.IOW
+
+// 表示名と製品名。`IOW.app` になり、プロセス名・メニューにも出る。
+IOW_APP_NAME = IOW
+PRODUCT_NAME = $(IOW_APP_NAME)
+
+// バージョン。
+//
+// `MARKETING_VERSION` はユーザーに見える版（`1.0`）。`CURRENT_PROJECT_VERSION` は
+// ビルド番号で、単調に増やす。
+MARKETING_VERSION = 0.1
+CURRENT_PROJECT_VERSION = 1
+
+// 対象アーキテクチャ。**arm64 のみ。**
+//
+// Xcode の既定は `arm64 x86_64` だが、このアプリの `MACOSX_DEPLOYMENT_TARGET` は
+// macOS 26.5 で、そのバージョンの macOS は Apple Silicon でしか動かない。x86_64 の
+// スライスを作っても、インストールできる機械が存在しない。
+//
+// 将来 Intel Mac を対象にするなら、まず配備ターゲットを下げる判断が先に要る。
+ARCHS = arm64
+
+// Swift のモジュール名（`PRODUCT_MODULE_NAME`）はここでは設定しない。
+// 構成ではなくターゲットごとに決まる値であり、プロジェクト全体へ配ると
+// app とテストの両方が同じ名前のモジュールを作ろうとしてビルドが衝突する。
+// app ターゲット側の設定にある。
+
+// コード署名。**自己署名である。**
+//
+// `Scripts/setup-dev-signing.sh` が手元の login keychain に作る証明書である。
+// この証明書はビルドごとに変わらない。TCC は許可を「bundle ID + designated
+// requirement」の組で記録するので、署名が安定していれば再ビルドしても
+// Accessibility / Input Monitoring の許可が残る。
+//
+// アプリを配らないので、Gatekeeper に通る必要は無い。自己署名で困らないのも
+// 同じ理由で、Gatekeeper が Developer ID を要求するのはダウンロードしてきた
+// 実行ファイルに対してで、自分でビルドしたものには quarantine 属性が付かない。
+//
+// **`Scripts/setup-dev-signing.sh` の実行が前提である。** この証明書が無いと
+// ad-hoc 署名になり、designated requirement がバイナリの cdhash に紐づく。
+// すると再ビルドのたびに Accessibility / Input Monitoring の許可が無効になり、
+// ホットキーが黙って効かなくなる。
+//
+// **`CODE_SIGN_IDENTITY` そのものではなく、独自の変数名にしてある。** この xcconfig は
+// プロジェクトレベルに付いているため、`CODE_SIGN_IDENTITY` と書くとテストターゲットにも
+// 降ってしまう。あちらは `CODE_SIGN_STYLE = Automatic` なので、手動署名の identity が
+// 来ると「development team が要る」と言って落ちる。値はここに置いたまま、適用先は
+// pbxproj のアプリターゲットで `$(IOW_CODE_SIGN_IDENTITY)` として受ける。
+IOW_CODE_SIGN_IDENTITY = IOW Development

@@ -1,0 +1,10 @@
+# --- macOS ---
+.DS_Store
+
+# --- Xcode ---
+## User-specific state
+xcuserdata/
+
+## Profiling / coverage artifacts
+*.profraw
+*.profdata
